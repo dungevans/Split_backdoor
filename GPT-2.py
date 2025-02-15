@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from rouge import Rouge
-
+from datasets import load_dataset
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
@@ -97,18 +97,19 @@ class ServerModel(nn.Module):
 
 
 # 5. Dữ liệu hội thoại mẫu
-dialogues = [
-    "Hello, how are you?",
-    "I'm fine, thanks for asking!",
-    "What are you working on?",
-    "Just learning about machine learning models."
-]
+# Load dữ liệu hội thoại từ Hugging Face
+dataset_name = "daily_dialog"
+dataset = load_dataset(dataset_name)
+
+dialogues = []
+for conversation in dataset["train"]:
+    dialogues.append(" ".join(conversation["dialog"]))
 
 # 6. Tạo dataset và dataloader
 dataset = ConversationDataset(dialogues, tokenizer, block_size=64)
 print(f"Dataset size: {len(dataset)}")  # Kiểm tra dataset không rỗng
 
-dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
 # 7. Khởi tạo mô hình Client và Server
 client_model = ClientModel(model, split_layer).to(device)
@@ -173,34 +174,36 @@ def evaluate_model(dataloader, client_model, server_model, tokenizer, device):
     client_model.train()
     server_model.train()
 
+
 for epoch in range(num_epochs):
-    for batch in dataloader:
+    print(f"\n--- Starting Epoch {epoch + 1}/{num_epochs} ---")  # Xác nhận bắt đầu epoch
+
+    for batch_idx, batch in enumerate(dataloader):
         optimizer_client.zero_grad()
         optimizer_server.zero_grad()
 
         input_ids = batch['input_ids'].to(device)
         labels = batch['labels'].to(device)
 
-        # --- Phía Client: Forward pass ---
+        # --- Phía Client ---
         client_output = client_model(input_ids)
         client_output_detached = client_output.clone().detach().requires_grad_(True)
 
-        # --- Phía Server: Forward pass ---
+        # --- Phía Server ---
         logits, loss = server_model(client_output_detached, labels=labels)
 
-        # --- Backward ---
+        # --- Backpropagation ---
         loss.backward()
         grad_from_server = client_output_detached.grad
         client_output.backward(grad_from_server)
 
-        # --- Cập nhật trọng số ---
         optimizer_client.step()
         optimizer_server.step()
 
-        print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+        # ✅ In thông tin batch và epoch đúng cách
+        print(f"Epoch {epoch + 1}/{num_epochs}, Batch {batch_idx + 1}/{len(dataloader)}, Loss: {loss.item():.4f}")
 
-    # Đánh giá mô hình sau từng epoch
+    # ✅ Thực hiện đánh giá mô hình sau mỗi epoch
     print(f"\n--- Evaluation after Epoch {epoch + 1} ---")
     evaluate_model(dataloader, client_model, server_model, tokenizer, device)
-    print("\n" + "="*50 + "\n")
-
+    print("\n" + "=" * 50 + "\n")
