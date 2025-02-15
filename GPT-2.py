@@ -14,7 +14,6 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 # Chọn device (GPU nếu có)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 # 1. Định nghĩa dataset cho dữ liệu hội thoại
 class ConversationDataset(Dataset):
     def __init__(self, dialogues, tokenizer, block_size=64):
@@ -43,7 +42,6 @@ class ConversationDataset(Dataset):
             "labels": torch.tensor(tokens, dtype=torch.long)
         }
 
-
 # 2. Load tokenizer và model GPT-2 đã pre-train
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 tokenizer.pad_token = tokenizer.eos_token  # GPT-2 không có token pad, dùng eos_token thay thế
@@ -53,7 +51,6 @@ model.to(device)
 
 # Chia mô hình ở lớp 6
 split_layer = 6
-
 
 # 3. Định nghĩa ClientModel
 class ClientModel(nn.Module):
@@ -72,7 +69,6 @@ class ClientModel(nn.Module):
         for block in self.blocks:
             hidden_states = block(hidden_states)[0]
         return hidden_states
-
 
 # 4. Định nghĩa ServerModel
 class ServerModel(nn.Module):
@@ -174,7 +170,6 @@ def evaluate_model(dataloader, client_model, server_model, tokenizer, device):
     client_model.train()
     server_model.train()
 
-
 for epoch in range(num_epochs):
     print(f"\n--- Starting Epoch {epoch + 1}/{num_epochs} ---")  # Xác nhận bắt đầu epoch
 
@@ -200,10 +195,10 @@ for epoch in range(num_epochs):
         optimizer_client.step()
         optimizer_server.step()
 
-        # ✅ In thông tin batch và epoch đúng cách
+        # In thông tin batch và epoch đúng cách
         print(f"Epoch {epoch + 1}/{num_epochs}, Batch {batch_idx + 1}/{len(dataloader)}, Loss: {loss.item():.4f}")
 
-    # ✅ Thực hiện đánh giá mô hình sau mỗi epoch
+    # Thực hiện đánh giá mô hình sau mỗi epoch
     print(f"\n--- Evaluation after Epoch {epoch + 1} ---")
     evaluate_model(dataloader, client_model, server_model, tokenizer, device)
     print("\n" + "=" * 50 + "\n")
