@@ -1,1 +1,69 @@
-# FedLLM
+# SplitFedLLM
+## Setup environment
+When executing on DAI, access to a virtual environment is required.
+```commandline
+source sl/bin/activate
+```
+## Configuration
+Application configuration is in the `config.yaml` file:
+```yaml
+name: SplitFedLLM
+server:
+  global-round: 1
+  clients:
+    - 1
+    - 1
+  cut-layers: 4
+  model-name: GPT2
+  data-name: GSM8K
+  model:
+    GPT2:
+      n_block: 12
+    Llama:
+      n_block: 23
+  parameters:
+    load: True
+    save: True
+  validation: True
+  data-distribution:
+    non-iid: False
+    num-sample: 500
+    num-label: 10
+    dirichlet:
+      alpha: 1
+    refresh-each-round: True
+  random-seed: 1
+
+rabbit:
+  address: 127.0.0.1
+  username: admin
+  password: admin
+  virtual-host: /
+
+log_path: .
+debug_mode: True
+
+learning:
+  learning-rate: 0.00001
+  weight-decay: 0.01
+  batch-size: 4
+  control-count: 1
+  clip-grad-norm: 0.0
+
+fine-tune:
+  name: LoRA
+  LoRA:
+    r: 8
+    alpha: 16
+```
+## How to Run
+### Server
+```commandline
+python server.py
+```
+### Client
+```commandline
+python client.py --layer_id 1
+```
+Where:
+- `--layer_id` is the index of client's layer, start from 1
