@@ -10,6 +10,7 @@ import src.Log
 import src.Utils
 
 from src.model.GPT2 import GPT2
+from src.model.Llama import Llama
 from src.val.get_val import get_val
 
 class Server:
@@ -191,6 +192,8 @@ class Server:
         # Send message to clients when consumed all clients
         if self.model_name == 'GPT2':
             klass = GPT2
+        elif self.model_name == 'Llama':
+            klass = Llama
         else:
             klass = globals()[f'{self.model_name}']
 
@@ -237,6 +240,7 @@ class Server:
                             "total_block": self.total_block,
                             "model_name": self.model_name,
                             "data_name": self.data_name,
+                            "num_sample": self.num_sample,
                             "control_count": self.control_count,
                             "batch_size": self.batch_size,
                             "lr": self.lr,

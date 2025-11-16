@@ -32,10 +32,9 @@ def delete_old_queues(address, username, password, virtual_host):
         return False
 
 def change_keys(state_dict, num, increase=True):
-    exclude_prefix = ["h."]
+    exclude_prefix = ["h.", "layers."]
     new_state_dict = {}
     for k, v in state_dict.items():
-
         if any(k.startswith(prefix) for prefix in exclude_prefix):
             parts = k.split(".")
             if increase:

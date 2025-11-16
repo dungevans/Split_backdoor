@@ -7,6 +7,7 @@ from src.fine_tune.GPT2 import Ft_GPT2
 from src.fine_tune.Llama import Ft_Llama
 from src.dataset.dataloader import dataloader
 from src.model.GPT2 import GPT2
+from src.model.Llama import Llama
 
 from peft import LoraConfig, TaskType, get_peft_model
 
@@ -20,7 +21,6 @@ class RpcClient:
         self.device = device
 
         self.response = None
-        self.model = None
         self.label_count = None
 
     def wait_response(self):
@@ -40,12 +40,14 @@ class RpcClient:
         state_dict = self.response["parameters"]
 
         if action == "START":
+            model = None
             model_name = self.response["model_name"]
             cut_layers = self.response['cut_layers']
             # label_count = self.response['label_count']
             total_block = self.response['total_block']
             clip_grad_norm = self.response['clip_grad_norm']
             data_name = self.response["data_name"]
+            num_sample = self.response["num_sample"]
             fine_tune_config = self.response['fine_tune_config']
 
             batch_size = self.response["batch_size"]
@@ -58,55 +60,62 @@ class RpcClient:
             elif model_name == 'Llama':
                 self.model_train = Ft_Llama(self.client_id, self.layer_id, self.channel, self.device)
 
-
-
             if fine_tune_config['name'] == 'LoRA':
-                peft_config = LoraConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    r=fine_tune_config['LoRA']['r'], lora_alpha=fine_tune_config['LoRA']['alpha'], lora_dropout=0.05, bias="none",
-                    target_modules=["c_attn", "c_proj", "c_fc"],
-                    fan_in_fan_out=True
-                )
+                if model_name == 'GPT2':
+                    peft_config = LoraConfig(
+                        task_type=TaskType.CAUSAL_LM,
+                        r=fine_tune_config['LoRA']['r'], lora_alpha=fine_tune_config['LoRA']['alpha'], lora_dropout=0.05, bias="none",
+                        target_modules=["c_attn", "c_proj", "c_fc"],
+                        fan_in_fan_out=True
+                    )
+                elif model_name == 'Llama':
+                    peft_config = LoraConfig(
+                        task_type=TaskType.CAUSAL_LM,
+                        r=8, lora_alpha=16, lora_dropout=0.05, bias="none",
+                        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                    )
+                else:
+                    peft_config = None
             else:
                 peft_config = None
 
             # Load model
-            if self.model is None:
-                if model_name == 'GPT2':
-                    klass = GPT2
-                else:
-                    klass = globals()[f'GPT2']
+            if model_name == 'GPT2':
+                klass = GPT2
+            elif model_name == 'Llama':
+                klass = Llama
+            else:
+                klass = globals()[f'GPT2']
 
-                if self.layer_id == 1:
-                    self.model = klass(layer_id=1, n_block=cut_layers)
+            if self.layer_id == 1:
+                model = klass(layer_id=1, n_block=cut_layers)
 
-                else:
-                    self.model = klass(layer_id=2, n_block=total_block-cut_layers)
-
-                self.model.to(self.device)
+            else:
+                model = klass(layer_id=2, n_block=total_block-cut_layers)
 
             # Read parameters and load to model
             if state_dict:
-                self.model.load_state_dict(state_dict)
+                model.load_state_dict(state_dict)
 
-            self.model = get_peft_model(self.model, peft_config)
-            self.model.print_trainable_parameters()
+            model = get_peft_model(model, peft_config)
+            model.print_trainable_parameters()
+            model.to(self.device)
 
             # Start training
             if self.layer_id == 1:
                 if self.train_loader is None:
-                    self.train_loader = dataloader(data_name, batch_size, self.label_count, train=True)
+                    self.train_loader = dataloader(model_name, data_name, batch_size, num_sample, train=True)
 
-                result, size = self.model_train.first_layer(self.model, lr, weight_decay, clip_grad_norm,
+                result, size = self.model_train.first_layer(model, lr, weight_decay, clip_grad_norm,
                                                                          control_count, self.train_loader)
 
             else:
-                result, size = self.model_train.last_layer(self.model, lr, weight_decay, clip_grad_norm)
+                result, size = self.model_train.last_layer(model, lr, weight_decay, clip_grad_norm)
 
             # Stop training, then send parameters to server
-            self.model = self.model.merge_and_unload()
+            model = model.merge_and_unload()
 
-            model_state_dict = copy.deepcopy(self.model.state_dict())
+            model_state_dict = copy.deepcopy(model.state_dict())
 
             if self.device != "cpu":
                 for key in model_state_dict:

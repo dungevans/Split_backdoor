@@ -14,13 +14,13 @@ server:
     - 1
     - 1
   cut-layers: 4
-  model-name: GPT2
+  model-name: GPT2 # GPT2/Llama
   data-name: GSM8K
   model:
     GPT2:
       n_block: 12
     Llama:
-      n_block: 23
+      n_block: 12
   parameters:
     load: True
     save: True
@@ -55,6 +55,7 @@ fine-tune:
   LoRA:
     r: 8
     alpha: 16
+
 ```
 ## How to Run
 ### Server

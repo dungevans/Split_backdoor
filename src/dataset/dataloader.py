@@ -1,25 +1,29 @@
 import os
 import json
+import random
 
-from transformers import GPT2Tokenizer
+from transformers import GPT2Tokenizer, AutoTokenizer
 
 from src.dataset.GSM8K import GSM8K
 from torch.utils.data import DataLoader
 
-def dataloader(data_name=None, batch_size=None, distribution=None, train=True):
+def dataloader(model_name =None, data_name=None, batch_size=None, distribution=500, train=True):
     if data_name == 'GSM8K':
-        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        if model_name == 'GPT2':
+            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        elif model_name == 'Llama':
+            tokenizer = AutoTokenizer.from_pretrained('JackFram/llama-160m')
+        else:
+            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         if train:
-            count = 0
             path = os.path.join("data/", f"train.jsonl")
-            train_set = []
-            with open(path) as f:
-                for line in f.readlines():
-                    if count < 500:
-                        if line:
-                            l = json.loads(line)
-                            train_set.append(l)
-                            count = count + 1
+
+            with open(path, "r", encoding="utf-8") as f:
+                data = [json.loads(line) for line in f if line.strip()]
+
+            random.shuffle(data)
+
+            train_set = data[:distribution]
             for ex in train_set:
                 ex.update(question=ex["question"] + "\n")
                 ex.update(answer=ex["answer"] + "<|endoftext|>")
@@ -31,15 +35,12 @@ def dataloader(data_name=None, batch_size=None, distribution=None, train=True):
             return train_loader
         else:
             path = os.path.join("data/", f"test.jsonl")
-            test_set = []
-            count = 0
-            with open(path) as f:
-                for line in f.readlines():
-                    if count < 100:
-                        if line:
-                            l = json.loads(line)
-                            test_set.append(l)
-                            count = count + 1
+            with open(path, "r", encoding="utf-8") as f:
+                data = [json.loads(line) for line in f if line.strip()]
+
+            random.shuffle(data)
+
+            test_set = data[:100]
             for ex in test_set:
                 ex.update(question=ex["question"] + "\n")
                 ex.update(answer=ex["answer"] + "<|endoftext|>")

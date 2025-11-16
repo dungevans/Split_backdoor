@@ -185,8 +185,3 @@ def shift_labels_for_lm(input_ids, ignore_index=-100):
     labels[:, :-1] = input_ids[:, 1:]
     labels[:, -1] = ignore_index
     return labels
-
-def print_trainable_parameters(model, name="(model)"):
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"{name}: {trainable:,}/{total:,} trainable params ({100.0*trainable/total:.2f}%)")

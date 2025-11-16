@@ -2,26 +2,26 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from src.dataset.dataloader import dataloader
-from transformers import GPT2Tokenizer
-from src.model.GPT2 import GPT2
+from transformers import AutoTokenizer
+from src.model.Llama import Llama
 import math
 
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 
 
-def val_GPT2(model_name, data_name, state_dict_full, logger):
+def val_Llama(model_name, data_name, state_dict_full, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Eval device:", device)
 
     smooth = SmoothingFunction().method1
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained("JackFram/llama-160m")
     tokenizer.pad_token = tokenizer.eos_token
 
     test_loader = dataloader(model_name=model_name, data_name=data_name, train=False)
 
-    model = GPT2()
+    model = Llama()
     model.load_state_dict(state_dict_full)
     model = model.to(device)
     model.eval()
