@@ -11,6 +11,7 @@ import src.Utils
 
 from src.model.GPT2 import GPT2
 from src.model.Llama import Llama
+from src.model.Bert import Bert
 from src.val.get_val import get_val
 
 class Server:
@@ -194,6 +195,8 @@ class Server:
             klass = GPT2
         elif self.model_name == 'Llama':
             klass = Llama
+        elif self.model_name == 'Bert':
+            klass = Bert
         else:
             klass = globals()[f'{self.model_name}']
 

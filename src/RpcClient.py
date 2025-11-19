@@ -5,9 +5,11 @@ import copy
 import src.Log
 from src.fine_tune.GPT2 import Ft_GPT2
 from src.fine_tune.Llama import Ft_Llama
+from src.fine_tune.Bert import Train_Bert
 from src.dataset.dataloader import dataloader
 from src.model.GPT2 import GPT2
 from src.model.Llama import Llama
+from src.model.Bert import Bert
 
 from peft import LoraConfig, TaskType, get_peft_model
 
@@ -59,6 +61,8 @@ class RpcClient:
                 self.model_train = Ft_GPT2(self.client_id, self.layer_id, self.channel, self.device)
             elif model_name == 'Llama':
                 self.model_train = Ft_Llama(self.client_id, self.layer_id, self.channel, self.device)
+            elif model_name == 'Bert':
+                self.model_train = Train_Bert(self.client_id, self.layer_id, self.channel, self.device)
 
             if fine_tune_config['name'] == 'LoRA':
                 if model_name == 'GPT2':
@@ -84,6 +88,8 @@ class RpcClient:
                 klass = GPT2
             elif model_name == 'Llama':
                 klass = Llama
+            elif model_name == 'Bert':
+                klass = Bert
             else:
                 klass = globals()[f'GPT2']
 
@@ -97,8 +103,10 @@ class RpcClient:
             if state_dict:
                 model.load_state_dict(state_dict)
 
-            model = get_peft_model(model, peft_config)
-            model.print_trainable_parameters()
+            if model_name != 'Bert':
+                model = get_peft_model(model, peft_config)
+                model.print_trainable_parameters()
+
             model.to(self.device)
 
             # Start training
@@ -113,7 +121,8 @@ class RpcClient:
                 result, size = self.model_train.last_layer(model, lr, weight_decay, clip_grad_norm)
 
             # Stop training, then send parameters to server
-            model = model.merge_and_unload()
+            if model_name != 'Bert':
+                model = model.merge_and_unload()
 
             model_state_dict = copy.deepcopy(model.state_dict())
 

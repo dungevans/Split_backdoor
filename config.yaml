@@ -5,12 +5,14 @@ server:
     - 1
     - 1
   cut-layers: 4
-  model-name: GPT2 # GPT2/Llama
-  data-name: GSM8K
+  model-name: Bert # GPT2/Llama/Bert
+  data-name: EMOTION # EMOTION/GSM8K
   model:
     GPT2:
       n_block: 12
     Llama:
+      n_block: 12
+    Bert:
       n_block: 12
   parameters:
     load: True
@@ -37,7 +39,7 @@ debug_mode: True
 learning:
   learning-rate: 0.00001
   weight-decay: 0.01
-  batch-size: 4
+  batch-size: 2
   control-count: 1
   clip-grad-norm: 0.0
 
