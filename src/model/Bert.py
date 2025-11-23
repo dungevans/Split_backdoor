@@ -1,8 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# AG_NEWS have 4 layers: World, Sports, Business, Sci/Tech
 
+class DotDict(dict):
+    def __getattr__(self, k):
+        try: return self[k]
+        except KeyError: raise AttributeError(k)
+    def __setattr__(self, k, v): self[k] = v
+    def __delattr__(self, k): del self[k]
+
+# AG_NEWS have 4 layers: World, Sports, Business, Sci/Tech
 class BertEmbeddings(nn.Module):
     def __init__(self, vocab_size, hidden_size, max_position_embeddings, type_vocab_size, dropout_prob):
         super(BertEmbeddings, self).__init__()
@@ -46,7 +53,7 @@ class BertSdpaSelfAttention(nn.Module):
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
-    def forward(self, hidden_states, attention_mask=None):
+    def forward(self, hidden_states):
 
         mixed_query_layer = self.query(hidden_states)
         mixed_key_layer = self.key(hidden_states)
@@ -60,11 +67,6 @@ class BertSdpaSelfAttention(nn.Module):
 
         import math
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
-
-        if attention_mask is not None:
-            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [B,1,1,L]
-            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
-            attention_scores = attention_scores + extended_attention_mask
 
         attention_probs = F.softmax(attention_scores, dim=-1)
         attention_probs = self.dropout(attention_probs)
@@ -96,8 +98,8 @@ class BertAttention(nn.Module):
         self.self = BertSdpaSelfAttention(hidden_size, num_attention_heads, dropout_prob)
         self.output = BertSelfOutput(hidden_size, dropout_prob)
 
-    def forward(self, hidden_states, attention_mask=None):
-        self_output = self.self(hidden_states, attention_mask)
+    def forward(self, hidden_states):
+        self_output = self.self(hidden_states)
         attention_output = self.output(self_output, hidden_states)
         return attention_output
 
@@ -132,24 +134,11 @@ class BertLayer(nn.Module):
         self.intermediate = BertIntermediate(hidden_size, intermediate_size)
         self.output = BertOutput(hidden_size, intermediate_size, dropout_prob)
 
-    def forward(self, hidden_states, attention_mask=None):
-        attention_output = self.attention(hidden_states, attention_mask)
+    def forward(self, hidden_states):
+        attention_output = self.attention(hidden_states)
         intermediate_output = self.intermediate(attention_output)
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
-
-class BertEncoder(nn.Module):
-    def __init__(self, hidden_size, num_hidden_layers, num_attention_heads, intermediate_size, dropout_prob):
-        super(BertEncoder, self).__init__()
-        self.layer = nn.ModuleList(
-            [BertLayer(hidden_size, num_attention_heads, intermediate_size, dropout_prob)
-             for _ in range(num_hidden_layers)]
-        )
-
-    def forward(self, hidden_states, attention_mask=None):
-        for layer_module in self.layer:
-            hidden_states = layer_module(hidden_states, attention_mask)
-        return hidden_states
 
 class BertPooler(nn.Module):
     def __init__(self, hidden_size):
@@ -175,11 +164,22 @@ class BertClassifier(nn.Module):
         return logits
 
 class Bert(nn.Module):
-    def __init__( self, vocab_size=30522, hidden_size=768, num_attention_heads=12, intermediate_size=3072,
+    def __init__( self, vocab_size=28996, hidden_size=768, num_attention_heads=12, intermediate_size=3072,
         max_position_embeddings=512, type_vocab_size=2, dropout_prob=0.1, layer_id=0, n_block=12
     ):
         super(Bert, self).__init__()
         self.layer_id = layer_id
+        self.config = DotDict(
+            model_type="bert",
+            vocab_size=vocab_size,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads, intermediate_size=intermediate_size,
+            max_position_embeddings=max_position_embeddings,
+            bos_token_id=101, eos_token_id=102, pad_token_id=0,
+            is_encoder_decoder=False, tie_word_embeddings=False,
+            use_return_dict=True, output_attentions=False, output_hidden_states=False
+        )
+
         if self.layer_id == 1:
             self.embeddings = BertEmbeddings(vocab_size=vocab_size, hidden_size=hidden_size, max_position_embeddings=max_position_embeddings,
                                              type_vocab_size=type_vocab_size,dropout_prob=dropout_prob)
@@ -187,13 +187,14 @@ class Bert(nn.Module):
                 [BertLayer(hidden_size, num_attention_heads, intermediate_size, dropout_prob)
                  for _ in range(n_block)]
             )
-        if self.layer_id == 2:
+        elif self.layer_id == 2:
             self.layers = nn.ModuleList(
                 [BertLayer(hidden_size, num_attention_heads, intermediate_size, dropout_prob)
                  for _ in range(n_block)]
             )
             self.pooler = BertPooler(hidden_size)
-            self.classifier = BertClassifier(hidden_size, 4, dropout_prob)
+            self.dropout = nn.Dropout(dropout_prob)
+            self.classifier = nn.Linear(hidden_size, 4)
         else:
             self.embeddings = BertEmbeddings(vocab_size=vocab_size, hidden_size=hidden_size,
                                              max_position_embeddings=max_position_embeddings,
@@ -203,27 +204,28 @@ class Bert(nn.Module):
                  for _ in range(n_block)]
             )
             self.pooler = BertPooler(hidden_size)
-            self.classifier = BertClassifier(hidden_size, 4, dropout_prob)
+            self.dropout = nn.Dropout(dropout_prob)
+            self.classifier = nn.Linear(hidden_size, 4)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None):
-        if attention_mask is None:
-            attention_mask = (input_ids != 0).long()
+    def forward(self, input_ids, token_type_ids=None,**kwargs):
 
         if self.layer_id == 1:
             x = self.embeddings(input_ids, token_type_ids)
             for encode in self.layers:
-                x = encode(x, attention_mask)
+                x = encode(x)
         elif self.layer_id == 2:
             x = input_ids
             for encode in self.layers:
-                x = encode(x, attention_mask)
+                x = encode(x)
             x = self.pooler(x)
+            x = self.dropout(x)
             x = self.classifier(x)
         else:
             x = self.embeddings(input_ids, token_type_ids)
             for encode in self.layers:
-                x = encode(x, attention_mask)
+                x = encode(x)
             x = self.pooler(x)
+            x = self.dropout(x)
             x = self.classifier(x)
 
-        return x, attention_mask
+        return x

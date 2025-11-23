@@ -15,6 +15,8 @@ class Ft_GPT2:
         self.channel = channel
         self.device = device
         self.data_count = 0
+        self.gpu_cpu = []
+        self.encode = []
         self.tokenizer = None
 
     def send_intermediate_output(self, data_id, output, attention_mask, labels, trace):
@@ -24,8 +26,15 @@ class Ft_GPT2:
 
         if trace:
             trace.append(self.client_id)
+            start_cpu = time.time()
+            output = output.detach().cpu().numpy()
+            labels = labels.cpu()
+
+            self.gpu_cpu.append(time.time() - start_cpu)
+
+
             message = pickle.dumps(
-                {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": trace,
+                {"data_id": data_id, "data": output, "label": labels, "trace": trace,
                 "attention_mask": attention_mask.cpu()}
             )
         else:
@@ -33,7 +42,7 @@ class Ft_GPT2:
                 {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": [self.client_id],
                 "attention_mask" :attention_mask.cpu()}
             )
-
+        print(f'len message : {len(message)} bytes')
         self.channel.basic_publish(
             exchange='',
             routing_key=forward_queue_name,
@@ -70,6 +79,9 @@ class Ft_GPT2:
         self.channel.basic_qos(prefetch_count=1)
 
         model = model.to(self.device)
+        forward_time = []
+        backward_time = []
+        comm_time = []
 
         for i in range(1):
             data_iter = iter(train_loader)
@@ -94,9 +106,12 @@ class Ft_GPT2:
                         data_id = received_data["data_id"]
 
                         data_input = data_store.pop(data_id)
+                        start_backward = time.time()
                         output, mask = model(input_ids=data_input[0], attention_mask=data_input[1])
                         output.backward(gradient=gradient)
                         optimizer.step()
+                        stop_backward = time.time()
+                        backward_time.append(stop_backward - start_backward)
                     else:
                         # speed control
                         if len(data_store) >= control_count:
@@ -109,17 +124,21 @@ class Ft_GPT2:
                             labels = batch['labels'].to(self.device)
                             data_id = uuid.uuid4()
                             data_store[data_id] = (input_ids, attention_mask)
-
+                            start_forward = time.time()
                             intermediate_output, mask = model(input_ids=input_ids, attention_mask=attention_mask)
+                            stop_forward = time.time()
+                            forward_time.append(stop_forward - start_forward)
                             intermediate_output = intermediate_output.detach().requires_grad_(True)
 
                             num_forward += 1
                             self.data_count += 1
 
                             pbar.update(1)
-
+                            start_comm = time.time()
                             self.send_intermediate_output(data_id, intermediate_output, mask,
                                                           labels, trace=None)
+                            stop_comm = time.time()
+                            comm_time.append(start_comm - stop_comm)
 
                         except StopIteration:
                             end_data = True
@@ -140,6 +159,9 @@ class Ft_GPT2:
                 received_data = pickle.loads(body)
                 src.Log.print_with_color(f"[<<<] Received message from server {received_data}", "blue")
                 if received_data["action"] == "PAUSE":
+                    print(f'forward: {forward_time}')
+                    print(f'backward: {backward_time}')
+                    print(f'comm: {comm_time}')
                     return True, self.data_count
             time.sleep(0.5)
 
@@ -160,6 +182,8 @@ class Ft_GPT2:
         print('Waiting for intermediate output. To exit press CTRL+C')
         model.to(self.device)
         model.train()
+        exec_time = []
+        comm_time = []
         while True:
             method_frame, header_frame, body = self.channel.basic_get(queue=forward_queue_name, auto_ack=True)
             if method_frame and body:
@@ -173,6 +197,7 @@ class Ft_GPT2:
 
                 intermediate_output = torch.tensor(intermediate_output_numpy, requires_grad=True).to(self.device)
 
+                start = time.time()
                 output, _ = model(input_ids=intermediate_output, attention_mask=attention_mask)
                 shift_logits = output[:, :-1, :].contiguous()  # [B, L-1, V]
                 shift_labels = labels[:, 1:].contiguous()  # [B, L-1]
@@ -192,11 +217,13 @@ class Ft_GPT2:
                 loss.backward()
 
                 optimizer.step()
+                exec_time.append(time.time() - start)
                 self.data_count += 1
 
                 gradient = intermediate_output.grad
-
+                start_comm = time.time()
                 self.send_gradient(data_id, gradient, trace)  # 1F1B
+                comm_time.append(time.time() - start_comm)
             # Check training process
             else:
                 broadcast_queue_name = f'reply_{self.client_id}'
@@ -205,6 +232,8 @@ class Ft_GPT2:
                     received_data = pickle.loads(body)
                     src.Log.print_with_color(f"[<<<] Received message from server {received_data}", "blue")
                     if received_data["action"] == "PAUSE":
+                        print(f'exec_time: {exec_time}')
+                        print(f'comm_time: {comm_time}')
                         return result, self.data_count
 
     def train_on_middle_layer(self, model, lr, momentum, clip_grad_norm, control_count=5, cluster=None):
@@ -212,11 +241,6 @@ class Ft_GPT2:
 
     def alone_training(self, model, lr, momentum, clip_grad_norm, train_loader=None, cluster=None):
         pass
-
-
-
-
-
 
 
 

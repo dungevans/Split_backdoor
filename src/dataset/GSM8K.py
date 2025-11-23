@@ -1,8 +1,6 @@
 import re
 import torch
 
-from transformers import GPT2Tokenizer
-
 ANS_RE = re.compile(r"#### (\-?[0-9\.\,]+)")
 INVALID_ANS = "[invalid]"
 

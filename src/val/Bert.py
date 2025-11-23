@@ -20,10 +20,9 @@ def val_Bert(model_name, data_name, state_dict_full, logger):
     with torch.no_grad():
         for batch in tqdm(test_loader):
             input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
 
-            logits, _ = model(input_ids, attention_mask=attention_mask)
+            logits = model(input_ids)
             loss = criterion(logits, labels)
             total_loss += loss.item()
             correct += (logits.argmax(1) == labels).sum().item()

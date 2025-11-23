@@ -44,6 +44,7 @@ learning:
   clip-grad-norm: 0.0
 
 fine-tune:
+  enable: True
   name: LoRA
   LoRA:
     r: 8

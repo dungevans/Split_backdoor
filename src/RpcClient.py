@@ -5,7 +5,7 @@ import copy
 import src.Log
 from src.fine_tune.GPT2 import Ft_GPT2
 from src.fine_tune.Llama import Ft_Llama
-from src.fine_tune.Bert import Train_Bert
+from src.fine_tune.Bert import Ft_Bert
 from src.dataset.dataloader import dataloader
 from src.model.GPT2 import GPT2
 from src.model.Llama import Llama
@@ -62,7 +62,7 @@ class RpcClient:
             elif model_name == 'Llama':
                 self.model_train = Ft_Llama(self.client_id, self.layer_id, self.channel, self.device)
             elif model_name == 'Bert':
-                self.model_train = Train_Bert(self.client_id, self.layer_id, self.channel, self.device)
+                self.model_train = Ft_Bert(self.client_id, self.layer_id, self.channel, self.device)
 
             if fine_tune_config['name'] == 'LoRA':
                 if model_name == 'GPT2':
@@ -75,15 +75,20 @@ class RpcClient:
                 elif model_name == 'Llama':
                     peft_config = LoraConfig(
                         task_type=TaskType.CAUSAL_LM,
-                        r=8, lora_alpha=16, lora_dropout=0.05, bias="none",
+                        r=fine_tune_config['LoRA']['r'], lora_alpha=fine_tune_config['LoRA']['alpha'], lora_dropout=0.05, bias="none",
                         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                    )
+                elif model_name == 'Bert':
+                    peft_config = LoraConfig(
+                        task_type="SEQ_CLS",
+                        r=8,lora_alpha=16,lora_dropout=0.1,bias="none",
+                        target_modules=["query", "key", "value", "dense"]
                     )
                 else:
                     peft_config = None
             else:
                 peft_config = None
 
-            # Load model
             if model_name == 'GPT2':
                 klass = GPT2
             elif model_name == 'Llama':
@@ -103,10 +108,15 @@ class RpcClient:
             if state_dict:
                 model.load_state_dict(state_dict)
 
-            if model_name != 'Bert':
-                model = get_peft_model(model, peft_config)
+            if fine_tune_config['enable']:
+                if model_name == 'Bert':
+                    model = get_peft_model(model, peft_config)
+                    if self.layer_id == 2:
+                        for param in model.classifier.parameters():
+                            param.requires_grad = True
+                else:
+                    model = get_peft_model(model, peft_config)
                 model.print_trainable_parameters()
-
             model.to(self.device)
 
             # Start training
@@ -121,7 +131,7 @@ class RpcClient:
                 result, size = self.model_train.last_layer(model, lr, weight_decay, clip_grad_norm)
 
             # Stop training, then send parameters to server
-            if model_name != 'Bert':
+            if fine_tune_config['enable']:
                 model = model.merge_and_unload()
 
             model_state_dict = copy.deepcopy(model.state_dict())

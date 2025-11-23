@@ -7,15 +7,16 @@ import torch
 import torch.nn as nn
 
 import src.Log
-class Train_Bert:
+class Ft_Bert:
     def __init__(self, client_id, layer_id, channel, device):
         self.client_id = client_id
         self.layer_id = layer_id
         self.channel = channel
         self.device = device
         self.data_count = 0
+        self.size = None
 
-    def send_intermediate_output(self, data_id, output, attention_mask, labels, trace):
+    def send_intermediate_output(self, data_id, output, labels, trace):
 
         forward_queue_name = f'intermediate_queue_{self.layer_id}'
         self.channel.queue_declare(forward_queue_name, durable=False)
@@ -23,15 +24,15 @@ class Train_Bert:
         if trace:
             trace.append(self.client_id)
             message = pickle.dumps(
-                {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": trace,
-                "attention_mask": attention_mask.cpu()}
+                {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": trace}
             )
         else:
             message = pickle.dumps(
-                {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": [self.client_id],
-                "attention_mask" :attention_mask.cpu()}
+                {"data_id": data_id, "data": output.detach().cpu().numpy(), "label": labels.cpu(), "trace": [self.client_id]}
             )
-
+        if self.size is None:
+            self.size = len(message)
+            print(f'Length message: {self.size} (bytes).')
         self.channel.basic_publish(
             exchange='',
             routing_key=forward_queue_name,
@@ -47,6 +48,9 @@ class Train_Bert:
         message = pickle.dumps(
             {"data_id": data_id, "data": gradient.detach().cpu().numpy(), "trace": trace})
 
+        if self.size is None:
+            self.size = len(message)
+            print(f'Length message: {self.size} (bytes).')
         self.channel.basic_publish(
             exchange='',
             routing_key=backward_queue_name,
@@ -68,6 +72,9 @@ class Train_Bert:
         model = model.to(self.device)
 
         data_iter = iter(train_loader)
+        forward = []
+        backward = []
+        comm = []
         num_forward = 0
         num_backward = 0
         end_data = False
@@ -89,10 +96,12 @@ class Train_Bert:
                     data_id = received_data["data_id"]
 
                     data_input = data_store.pop(data_id)
-                    output, _ = model(input_ids=data_input[0], attention_mask=data_input[1])
+                    start_backward = time.time()
+                    output = model(input_ids=data_input)
                     output.backward(gradient=gradient)
-                    nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
                     optimizer.step()
+                    time_backward = time.time() - start_backward
+                    backward.append(time_backward)
                 else:
                     # speed control
                     if len(data_store) > control_count:
@@ -101,21 +110,24 @@ class Train_Bert:
                     try:
                         batch = next(data_iter)
                         input_ids = batch['input_ids'].to(self.device)
-                        attention_mask = batch['attention_mask'].to(self.device)
                         labels = batch['labels'].to(self.device)
                         data_id = uuid.uuid4()
-                        data_store[data_id] = (input_ids, attention_mask)
+                        data_store[data_id] = input_ids
 
-                        intermediate_output, _ = model(input_ids=input_ids, attention_mask=attention_mask)
+                        start_forward = time.time()
+                        intermediate_output = model(input_ids=input_ids)
+                        time_forward = time.time() - start_forward
+                        forward.append(time_forward)
                         intermediate_output = intermediate_output.detach().requires_grad_(True)
 
                         num_forward += 1
                         self.data_count += 1
 
                         pbar.update(1)
-
-                        self.send_intermediate_output(data_id, intermediate_output, attention_mask,
-                                                      labels, trace=None)
+                        start_comm = time.time()
+                        self.send_intermediate_output(data_id, intermediate_output, labels, trace=None)
+                        time_comm = time.time() - start_comm
+                        comm.append(time_comm)
 
                     except StopIteration:
                         end_data = True
@@ -137,6 +149,9 @@ class Train_Bert:
                 received_data = pickle.loads(body)
                 src.Log.print_with_color(f"[<<<] Received message from server {received_data}", "blue")
                 if received_data["action"] == "PAUSE":
+                    print(f'Forward time: {forward}s.')
+                    print(f'Backward time: {backward}s.')
+                    print(f'Comm time: {comm}s.')
                     return True, self.data_count
             time.sleep(0.5)
 
@@ -151,6 +166,9 @@ class Train_Bert:
         print('Waiting for intermediate output. To exit press CTRL+C')
         model.to(self.device)
         model.train()
+        execute = []
+        comm = []
+
         while True:
             method_frame, header_frame, body = self.channel.basic_get(queue=forward_queue_name, auto_ack=True)
             if method_frame and body:
@@ -158,14 +176,13 @@ class Train_Bert:
                 optimizer.zero_grad()
                 received_data = pickle.loads(body)
                 intermediate_output_numpy = received_data["data"]
-                attention_mask = received_data["attention_mask"].to(self.device)
                 trace = received_data["trace"]
                 data_id = received_data["data_id"]
                 labels = received_data["label"].to(self.device)
-
+                start_exec = time.time()
                 intermediate_output = torch.tensor(intermediate_output_numpy, requires_grad=True).to(self.device)
 
-                output, _ = model(input_ids=intermediate_output, attention_mask=attention_mask)
+                output = model(input_ids=intermediate_output)
 
                 loss = criterion(output, labels)
 
@@ -176,14 +193,17 @@ class Train_Bert:
                 print(f"Loss: {loss.item()}")
                 intermediate_output.retain_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
 
                 optimizer.step()
+                time_exec = time.time() - start_exec
+                execute.append(time_exec)
                 self.data_count += 1
 
                 gradient = intermediate_output.grad
-
+                start_comm = time.time()
                 self.send_gradient(data_id, gradient, trace)
+                time_comm = time.time() - start_comm
+                comm.append(time_comm)
 
             else:
                 broadcast_queue_name = f'reply_{self.client_id}'
@@ -192,6 +212,8 @@ class Train_Bert:
                     received_data = pickle.loads(body)
                     src.Log.print_with_color(f"[<<<] Received message from server {received_data}", "blue")
                     if received_data["action"] == "PAUSE":
+                        print(f'Forward + Backward: {execute}s')
+                        print(f'Comm time: {comm}s')
                         return result, self.data_count
 
     def train_on_middle_layer(self, model, lr, momentum, clip_grad_norm, control_count=5, cluster=None):
@@ -199,8 +221,6 @@ class Train_Bert:
 
     def alone_training(self, model, lr, momentum, clip_grad_norm, train_loader=None, cluster=None):
         pass
-
-
 
 
 

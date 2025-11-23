@@ -60,7 +60,7 @@ def dataloader(model_name =None, data_name=None, batch_size=None, distribution=5
             download_mode='reuse_dataset_if_exists',
             cache_dir='./hf_cache'
         )
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
         if train:
             num_label = int(distribution / 4)
             distribution = [num_label, num_label, num_label, num_label]
