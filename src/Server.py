@@ -13,7 +13,7 @@ from src.model.GPT2 import GPT2
 from src.model.Llama import Llama
 from src.model.Bert import Bert
 from src.val.get_val import get_val
-
+#dang tim cach chay 
 class Server:
     def __init__(self, config):
         # RabbitMQ
