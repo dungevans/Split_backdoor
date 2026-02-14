@@ -3,15 +3,11 @@ import pickle
 import copy
 
 import src.Log
-from src.fine_tune.GPT2 import Ft_GPT2
-from src.fine_tune.Llama import Ft_Llama
 from src.fine_tune.Bert import Ft_Bert
 from src.dataset.dataloader import dataloader
-from src.model.GPT2 import GPT2
-from src.model.Llama import Llama
 from src.model.Bert import Bert
 
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, get_peft_model
 
 class RpcClient:
     def __init__(self, client_id, layer_id, channel, device):
@@ -44,6 +40,8 @@ class RpcClient:
         if action == "START":
             model = None
             model_name = self.response["model_name"]
+            if model_name != "Bert":
+                raise ValueError(f"Bert-only mode: unsupported model '{model_name}'")
             cut_layers = self.response['cut_layers']
             # label_count = self.response['label_count']
             total_block = self.response['total_block']
@@ -57,46 +55,18 @@ class RpcClient:
             weight_decay = self.response["weight_decay"]
             control_count = self.response["control_count"]
 
-            if model_name == 'GPT2':
-                self.model_train = Ft_GPT2(self.client_id, self.layer_id, self.channel, self.device)
-            elif model_name == 'Llama':
-                self.model_train = Ft_Llama(self.client_id, self.layer_id, self.channel, self.device)
-            elif model_name == 'Bert':
-                self.model_train = Ft_Bert(self.client_id, self.layer_id, self.channel, self.device)
+            self.model_train = Ft_Bert(self.client_id, self.layer_id, self.channel, self.device)
 
             if fine_tune_config['name'] == 'LoRA':
-                if model_name == 'GPT2':
-                    peft_config = LoraConfig(
-                        task_type=TaskType.CAUSAL_LM,
-                        r=fine_tune_config['LoRA']['r'], lora_alpha=fine_tune_config['LoRA']['alpha'], lora_dropout=0.05, bias="none",
-                        target_modules=["c_attn", "c_proj", "c_fc"],
-                        fan_in_fan_out=True
-                    )
-                elif model_name == 'Llama':
-                    peft_config = LoraConfig(
-                        task_type=TaskType.CAUSAL_LM,
-                        r=fine_tune_config['LoRA']['r'], lora_alpha=fine_tune_config['LoRA']['alpha'], lora_dropout=0.05, bias="none",
-                        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-                    )
-                elif model_name == 'Bert':
-                    peft_config = LoraConfig(
-                        task_type="SEQ_CLS",
-                        r=8,lora_alpha=16,lora_dropout=0.1,bias="none",
-                        target_modules=["query", "key", "value", "dense"]
-                    )
-                else:
-                    peft_config = None
+                peft_config = LoraConfig(
+                    task_type="SEQ_CLS",
+                    r=8, lora_alpha=16, lora_dropout=0.1, bias="none",
+                    target_modules=["query", "key", "value", "dense"]
+                )
             else:
                 peft_config = None
 
-            if model_name == 'GPT2':
-                klass = GPT2
-            elif model_name == 'Llama':
-                klass = Llama
-            elif model_name == 'Bert':
-                klass = Bert
-            else:
-                klass = globals()[f'GPT2']
+            klass = Bert
 
             if self.layer_id == 1:
                 model = klass(layer_id=1, n_block=cut_layers)
@@ -109,13 +79,10 @@ class RpcClient:
                 model.load_state_dict(state_dict)
 
             if fine_tune_config['enable']:
-                if model_name == 'Bert':
-                    model = get_peft_model(model, peft_config)
-                    if self.layer_id == 2:
-                        for param in model.classifier.parameters():
-                            param.requires_grad = True
-                else:
-                    model = get_peft_model(model, peft_config)
+                model = get_peft_model(model, peft_config)
+                if self.layer_id == 2:
+                    for param in model.classifier.parameters():
+                        param.requires_grad = True
                 model.print_trainable_parameters()
             model.to(self.device)
 

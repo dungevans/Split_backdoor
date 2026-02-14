@@ -1,1 +1,1 @@
-from .GPT2 import *
+from .Bert import *

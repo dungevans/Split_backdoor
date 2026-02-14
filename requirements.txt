@@ -4,5 +4,3 @@ transformers>=4.36.2
 datasets
 peft
 numpy
-nltk
-rouge_score

@@ -9,8 +9,6 @@ import copy
 import src.Log
 import src.Utils
 
-from src.model.GPT2 import GPT2
-from src.model.Llama import Llama
 from src.model.Bert import Bert
 from src.val.get_val import get_val
 #dang tim cach chay 
@@ -23,6 +21,8 @@ class Server:
         virtual_host = config["rabbit"]["virtual-host"]
 
         self.model_name = config["server"]["model-name"]
+        if self.model_name != "Bert":
+            raise ValueError(f"Bert-only mode: unsupported model-name '{self.model_name}'")
         self.data_name = config["server"]["data-name"]
         self.total_clients = config["server"]["clients"]
         self.cut_layers = config["server"]["cut-layers"]
@@ -189,16 +189,8 @@ class Server:
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def notify_clients(self, start=True, register=True):
-
-        # Send message to clients when consumed all clients
-        if self.model_name == 'GPT2':
-            klass = GPT2
-        elif self.model_name == 'Llama':
-            klass = Llama
-        elif self.model_name == 'Bert':
-            klass = Bert
-        else:
-            klass = globals()[f'{self.model_name}']
+        # Bert-only mode
+        klass = Bert
 
         for (client_id, layer_id) in self.list_clients:
             # Read parameters file
