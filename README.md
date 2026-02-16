@@ -1,67 +1,51 @@
-# SplitFedLLM
-## Setup environment
-When executing on DAI, access to a virtual environment is required.
+# LLM Training (No Split Learning)
+
+This project now runs as a single-process LLM training pipeline using a full BERT model.
+RabbitMQ, server-client split, and split learning orchestration are no longer required for the main run path.
+
+## Setup
 ```commandline
 source sl/bin/activate
+pip install -r requirements.txt
 ```
+
 ## Configuration
-Application configuration is in the `config.yaml` file:
+Main config is in `config.yaml`:
+
 ```yaml
-name: SplitFedLLM
-server:
-  global-round: 1
-  clients:
-    - 1
-    - 1
-  cut-layers: 4
+name: LLM
+
+training:
   model-name: Bert
   data-name: EMOTION
-  model:
-    Bert:
-      n_block: 12
-  parameters:
-    load: True
-    save: True
-  validation: True
-  data-distribution:
-    non-iid: False
-    num-sample: 500
-    num-label: 10
-    dirichlet:
-      alpha: 1
-    refresh-each-round: True
+  n-block: 12
+  epochs: 1
+  num-sample: 500
   random-seed: 1
-
-rabbit:
-  address: 127.0.0.1
-  username: admin
-  password: admin
-  virtual-host: /
-
-log_path: .
-debug_mode: True
+  eval-every-epoch: true
+  load-path: null
+  save-path: Bert.pt
 
 learning:
   learning-rate: 0.00001
   weight-decay: 0.01
   batch-size: 2
-  control-count: 1
   clip-grad-norm: 0.0
 
-fine-tune:
-  name: LoRA
-  LoRA:
-    r: 8
-    alpha: 16
+log_path: .
+debug_mode: true
 ```
-## How to Run
-### Server
+
+## Run
 ```commandline
-python server.py
+python server.py --config config.yaml
 ```
-### Client
+
+Or:
 ```commandline
-python client.py --layer_id 1
+bash run.sh
 ```
-Where:
-- `--layer_id` is the index of client's layer, start from 1
+
+## Output
+- Training/evaluation logs are written to `app.log`.
+- Model checkpoint is saved to `training.save-path` (default: `Bert.pt`).

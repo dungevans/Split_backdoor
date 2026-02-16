@@ -1,32 +1,151 @@
 import argparse
-import sys
-import signal
-from src.Server import Server
-from src.Utils import delete_old_queues
-import src.Log
+import os
+import random
+
+import torch
+import torch.nn as nn
 import yaml
+from tqdm import tqdm
 
-parser = argparse.ArgumentParser(description="Split learning framework with controller.")
-
-args = parser.parse_args()
-
-with open('config.yaml') as file:
-    config = yaml.safe_load(file)
-address = config["rabbit"]["address"]
-username = config["rabbit"]["username"]
-password = config["rabbit"]["password"]
-virtual_host = config["rabbit"]["virtual-host"]
+import src.Log
+from src.dataset.dataloader import dataloader
+from src.model.Bert import Bert
 
 
-def signal_handler(sig, frame):
-    print("\nCatch stop signal Ctrl+C. Stop the program.")
-    delete_old_queues(address, username, password, virtual_host)
-    sys.exit(0)
+def set_seed(seed):
+    if seed is None:
+        return
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def evaluate(model, data_loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
+
+    with torch.no_grad():
+        for batch in data_loader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+
+            logits = model(input_ids)
+            loss = criterion(logits, labels)
+
+            total_loss += loss.item()
+            total_correct += (logits.argmax(dim=1) == labels).sum().item()
+            total_samples += labels.size(0)
+
+    avg_loss = total_loss / max(len(data_loader), 1)
+    accuracy = total_correct / max(total_samples, 1)
+    return avg_loss, accuracy
+
+
+def train(config):
+    training = config["training"]
+    learning = config["learning"]
+
+    model_name = training["model-name"]
+    if model_name != "Bert":
+        raise ValueError(f"Bert-only mode: unsupported model-name '{model_name}'")
+
+    data_name = training["data-name"]
+    epochs = training["epochs"]
+    n_block = training.get("n-block", 12)
+    num_sample = training["num-sample"]
+    eval_every_epoch = training.get("eval-every-epoch", True)
+    save_path = training.get("save-path", "Bert.pt")
+    load_path = training.get("load-path")
+
+    batch_size = learning["batch-size"]
+    lr = learning["learning-rate"]
+    weight_decay = learning["weight-decay"]
+    clip_grad_norm = learning.get("clip-grad-norm", 0.0)
+
+    set_seed(training.get("random-seed"))
+
+    log_path = config.get("log_path", ".")
+    os.makedirs(log_path, exist_ok=True)
+    logger = src.Log.Logger(os.path.join(log_path, "app.log"), config.get("debug_mode", False))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.log_info(f"Using device: {device}")
+
+    train_loader = dataloader(
+        model_name=model_name,
+        data_name=data_name,
+        batch_size=batch_size,
+        distribution=num_sample,
+        train=True,
+    )
+    test_loader = dataloader(model_name=model_name, data_name=data_name, train=False)
+
+    model = Bert(layer_id=0, n_block=n_block).to(device)
+    if load_path:
+        if os.path.exists(load_path):
+            state_dict = torch.load(load_path, map_location=device, weights_only=True)
+            model.load_state_dict(state_dict)
+            logger.log_info(f"Loaded checkpoint: {load_path}")
+        else:
+            logger.log_warning(f"Checkpoint not found: {load_path}")
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    logger.log_info(f"Starting training for {epochs} epoch(s)")
+    for epoch in range(1, epochs + 1):
+        model.train()
+        running_loss = 0.0
+        running_correct = 0
+        running_samples = 0
+
+        progress = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", unit="batch")
+        for batch in progress:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+
+            optimizer.zero_grad()
+            logits = model(input_ids)
+            loss = criterion(logits, labels)
+            loss.backward()
+
+            if clip_grad_norm and clip_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+
+            optimizer.step()
+
+            running_loss += loss.item()
+            running_correct += (logits.argmax(dim=1) == labels).sum().item()
+            running_samples += labels.size(0)
+
+            progress.set_postfix(loss=f"{loss.item():.4f}")
+
+        train_loss = running_loss / max(len(train_loader), 1)
+        train_acc = running_correct / max(running_samples, 1)
+        logger.log_info(f"Epoch {epoch}: train_loss={train_loss:.4f}, train_acc={train_acc:.4f}")
+
+        if eval_every_epoch:
+            val_loss, val_acc = evaluate(model, test_loader, criterion, device)
+            logger.log_info(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
+
+    if save_path:
+        torch.save(model.state_dict(), save_path)
+        logger.log_info(f"Saved model to: {save_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Single-model LLM training")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
+    args = parser.parse_args()
+
+    with open(args.config, "r") as file:
+        config = yaml.safe_load(file)
+
+    train(config)
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
-    delete_old_queues(address, username, password, virtual_host)
-    server = Server(config)
-    server.start()
-    src.Log.print_with_color("Ok, ready!", "green")
+    main()
